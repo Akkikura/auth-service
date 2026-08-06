@@ -1,0 +1,109 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: '1.26.5'
+          cache: true
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - run: go mod verify
+      - run: go mod tidy -diff
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@0a35821d5c230e903fcfe077583637dea1b27b47 # v9.0.0
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+      - run: go test -race -timeout=2m ./...
+      - run: go build ./cmd/api ./cmd/migrate
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - run: govulncheck ./...
+
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --disable-pip-version-check openapi-spec-validator==0.7.2
+      - run: openapi-spec-validator api/openapi.yaml
+      - run: >-
+          docker run --rm
+          -v "$PWD:/work:ro"
+          ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+          -strict -summary /work/deploy/kubernetes
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        env:
+          POSTGRES_DB: auth_test
+          POSTGRES_USER: auth
+          POSTGRES_PASSWORD: auth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U auth -d auth_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: '1.26.5'
+          cache: true
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - run: go test -race -tags=integration ./integration -count=1 -timeout=5m
+        env:
+          AUTH_SESSION_HASH_KEY: 01234567890123456789012345678901
+          POSTGRES_URL: postgres://auth:auth@localhost:5432/auth_test?sslmode=disable
+          REDIS_ADDRESS: localhost:6379
+          REDIS_KEY_PREFIX: 'auth:ci:'
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: docker build --tag auth-service:ci .
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: auth-service:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL

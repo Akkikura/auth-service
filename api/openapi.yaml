@@ -1,0 +1,202 @@
+openapi: 3.1.0
+info:
+  title: Auth Service API
+  version: 1.1.0
+  description: Authentication API. Password length is controlled at runtime by AUTH_PASSWORD_MIN_LENGTH and AUTH_PASSWORD_MAX_LENGTH.
+servers:
+  - url: http://localhost:8080
+paths:
+  /register:
+    post:
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Credentials' }
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Credentials' }
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /me:
+    get:
+      operationId: me
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /logout:
+    post:
+      operationId: logout
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Session revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /health/live:
+    get:
+      operationId: liveness
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /health/ready:
+    get:
+      operationId: readiness
+      responses:
+        '200':
+          description: PostgreSQL and Redis are reachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/NotReady' }
+  /metrics:
+    get:
+      operationId: metrics
+      responses:
+        '200':
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema: { type: string }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  schemas:
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          description: Length is validated using runtime configuration; defaults are 12 to 128 Unicode code points.
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [token, token_type, expires_at]
+      properties:
+        token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_at: { type: string, format: date-time }
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ok }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing, invalid, or expired authentication
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    MethodNotAllowed:
+      description: HTTP method is not supported for this path
+      headers:
+        Allow: { schema: { type: string } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Email already exists
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    TooLarge:
+      description: Request body exceeds the configured limit
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    UnsupportedMediaType:
+      description: Content-Type must be application/json
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    InternalError:
+      description: Unexpected internal error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unavailable:
+      description: Required dependency is temporarily unavailable
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotReady:
+      description: One or more dependencies are not ready
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
